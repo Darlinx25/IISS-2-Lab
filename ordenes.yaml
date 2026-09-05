@@ -1,0 +1,407 @@
+openapi: 3.0.3
+
+info:
+  title: API de Órdenes
+  description: API REST para la gestión de órdenes de compra.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8081
+    description: Servidor local
+
+tags:
+  - name: Ordenes
+    description: Operaciones relacionadas con órdenes de compra
+
+paths:
+
+  /api/ordenes:
+
+    get:
+      tags:
+        - Ordenes
+      summary: Obtener todas las órdenes
+      description: Retorna una lista de órdenes con sus datos y los identificadores y cantidades de los productos solicitados.
+      operationId: obtenerOrdenes
+      responses:
+        '200':
+          description: Lista de órdenes obtenida correctamente
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Orden'
+
+
+    post:
+      tags:
+        - Ordenes
+      summary: Crear una orden
+      description: Crea una nueva orden de compra.
+      operationId: crearOrden
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrdenRequest'
+
+      responses:
+
+        '201':
+          description: Orden creada exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdResponse'
+              example:
+                id: 1001
+
+        '400':
+          description: Error en los datos de la orden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                mensaje: "Los datos de la orden son inválidos"
+
+        '409':
+          description: Conflicto debido a producto inexistente o stock insuficiente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+
+                productoInexistente:
+                  summary: Producto inexistente
+                  value:
+                    mensaje: "El producto con identificador 5 no existe"
+
+                stockInsuficiente:
+                  summary: Stock insuficiente
+                  value:
+                    mensaje: "Stock insuficiente para el producto con identificador 1"
+
+
+  /api/ordenes/{id}:
+
+    get:
+      tags:
+        - Ordenes
+      summary: Obtener una orden por ID
+      description: Retorna los datos de una orden y los identificadores y cantidades de los productos solicitados.
+      operationId: obtenerOrdenPorId
+      parameters:
+        - $ref: '#/components/parameters/OrdenId'
+
+      responses:
+
+        '200':
+          description: Orden encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Orden'
+
+        '404':
+          description: Orden no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                mensaje: "No existe una orden con el identificador 1001"
+
+
+  /api/ordenes/{id}/detalle:
+
+    get:
+      tags:
+        - Ordenes
+      summary: Obtener detalle de una orden
+      description: Retorna los datos de la orden y el detalle completo de cada producto solicitado.
+      operationId: obtenerDetalleOrden
+      parameters:
+        - $ref: '#/components/parameters/OrdenId'
+
+      responses:
+
+        '200':
+          description: Detalle de la orden obtenido correctamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrdenDetalle'
+
+        '404':
+          description: Orden no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                mensaje: "No existe una orden con el identificador 1001"
+
+
+components:
+
+  parameters:
+
+    OrdenId:
+      name: id
+      in: path
+      required: true
+      description: Identificador único de la orden.
+      schema:
+        type: integer
+        format: int64
+        example: 1001
+
+
+  schemas:
+
+    Orden:
+      type: object
+      required:
+        - id
+        - email
+        - direccionEnvio
+        - telefono
+        - estado
+        - fechaCreacion
+        - productos
+      properties:
+
+        id:
+          type: integer
+          format: int64
+          example: 1001
+
+        email:
+          type: string
+          format: email
+          example: cliente@email.com
+
+        direccionEnvio:
+          type: string
+          example: Av. Italia 3333, Maldonado
+
+        telefono:
+          type: string
+          example: "+59899111222"
+
+        estado:
+          type: string
+          enum:
+            - Created
+            - Confirmed
+            - Processing
+            - Shipped
+            - Delivered
+            - Cancelled
+          example: Created
+
+        fechaCreacion:
+          type: string
+          format: date-time
+          example: "2026-06-21T14:30:00-03:00"
+
+        productos:
+          type: array
+          description: Lista de productos solicitados, indicando identificador y cantidad.
+          items:
+            $ref: '#/components/schemas/ProductoOrden'
+
+
+    OrdenRequest:
+      type: object
+      required:
+        - email
+        - direccionEnvio
+        - telefono
+        - productos
+      properties:
+
+        email:
+          type: string
+          format: email
+          example: cliente@email.com
+
+        direccionEnvio:
+          type: string
+          example: Av. Italia 3333, Maldonado
+
+        telefono:
+          type: string
+          example: "+59899111222"
+
+        productos:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ProductoOrdenRequest'
+
+
+    ProductoOrden:
+      type: object
+      required:
+        - productoId
+        - cantidad
+      properties:
+
+        productoId:
+          type: integer
+          format: int64
+          example: 1
+
+        cantidad:
+          type: integer
+          minimum: 1
+          example: 2
+
+
+    ProductoOrdenRequest:
+      type: object
+      required:
+        - productoId
+        - cantidad
+      properties:
+
+        productoId:
+          type: integer
+          format: int64
+          example: 1
+
+        cantidad:
+          type: integer
+          minimum: 1
+          example: 2
+
+
+    OrdenDetalle:
+      type: object
+      required:
+        - id
+        - email
+        - direccionEnvio
+        - telefono
+        - estado
+        - fechaCreacion
+        - productos
+      properties:
+
+        id:
+          type: integer
+          format: int64
+          example: 1001
+
+        email:
+          type: string
+          format: email
+          example: cliente@email.com
+
+        direccionEnvio:
+          type: string
+          example: Av. Italia 3333, Maldonado
+
+        telefono:
+          type: string
+          example: "+59899111222"
+
+        estado:
+          type: string
+          enum:
+            - Created
+            - Confirmed
+            - Processing
+            - Shipped
+            - Delivered
+            - Cancelled
+          example: Created
+
+        fechaCreacion:
+          type: string
+          format: date-time
+          example: "2026-06-21T14:30:00-03:00"
+
+        productos:
+          type: array
+          description: Lista de productos solicitados con el detalle completo de cada producto.
+          items:
+            $ref: '#/components/schemas/ProductoDetalle'
+
+
+    ProductoDetalle:
+      type: object
+      required:
+        - productoId
+        - cantidad
+        - nombre
+        - descripcion
+        - precioUnitario
+        - stock
+        - imagenes
+      properties:
+
+        productoId:
+          type: integer
+          format: int64
+          example: 1
+
+        cantidad:
+          type: integer
+          minimum: 1
+          example: 2
+
+        nombre:
+          type: string
+          example: Notebook Lenovo ThinkPad
+
+        descripcion:
+          type: string
+          example: Notebook Intel i7 16GB RAM
+
+        precioUnitario:
+          type: number
+          format: double
+          example: 1250.50
+
+        stock:
+          type: integer
+          minimum: 0
+          example: 15
+
+        imagenes:
+          type: array
+          items:
+            type: string
+            format: uri
+          example:
+            - https://ejemplo.com/imagenes/notebook1.jpg
+            - https://ejemplo.com/imagenes/notebook2.jpg
+
+
+    IdResponse:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Identificador generado para la orden.
+          example: 1001
+
+
+    ErrorResponse:
+      type: object
+      required:
+        - mensaje
+      properties:
+        mensaje:
+          type: string
+          example: "Se produjo un error al procesar la solicitud"
+

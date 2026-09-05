@@ -1,0 +1,326 @@
+openapi: 3.0.3
+
+info:
+  title: API de Productos
+  description: API REST para la gestión de productos del local.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Servidor local
+
+tags:
+  - name: Productos
+    description: Operaciones relacionadas con productos
+
+paths:
+
+  /api/productos:
+
+    get:
+      tags:
+        - Productos
+      summary: Obtener todos los productos
+      description: Retorna una lista con todos los productos y sus datos.
+      operationId: obtenerProductos
+      responses:
+        '200':
+          description: Lista de productos obtenida correctamente
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Producto'
+
+    post:
+      tags:
+        - Productos
+      summary: Crear un producto
+      description: Crea un nuevo producto.
+      operationId: crearProducto
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductoRequest'
+      responses:
+        '201':
+          description: Producto creado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdResponse'
+              example:
+                id: 1
+
+        '400':
+          description: Error al crear el producto
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                mensaje: "Los datos del producto son inválidos"
+
+
+  /api/productos/{id}:
+
+    get:
+      tags:
+        - Productos
+      summary: Obtener un producto por ID
+      description: Retorna los datos del producto correspondiente al identificador indicado.
+      operationId: obtenerProductoPorId
+      parameters:
+        - $ref: '#/components/parameters/ProductoId'
+      responses:
+        '200':
+          description: Producto encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Producto'
+
+        '404':
+          description: Producto no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                mensaje: "No existe un producto con el identificador 1"
+
+
+    put:
+      tags:
+        - Productos
+      summary: Actualizar un producto
+      description: Actualiza todos los datos de un producto existente.
+      operationId: actualizarProducto
+      parameters:
+        - $ref: '#/components/parameters/ProductoId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductoRequest'
+      responses:
+        '200':
+          description: Producto actualizado correctamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+              example:
+                mensaje: "Producto actualizado correctamente"
+
+        '404':
+          description: Producto no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                mensaje: "No existe un producto con el identificador 1"
+
+
+    patch:
+      tags:
+        - Productos
+      summary: Actualizar parcialmente un producto
+      description: Modifica uno o más datos de un producto existente.
+      operationId: modificarProducto
+      parameters:
+        - $ref: '#/components/parameters/ProductoId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductoPatch'
+      responses:
+        '200':
+          description: Producto modificado correctamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+              example:
+                mensaje: "Producto modificado correctamente"
+
+        '404':
+          description: Producto no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                mensaje: "No existe un producto con el identificador 1"
+
+
+components:
+
+  parameters:
+
+    ProductoId:
+      name: id
+      in: path
+      required: true
+      description: Identificador único del producto
+      schema:
+        type: integer
+        format: int64
+        example: 1
+
+
+  schemas:
+
+    Producto:
+      type: object
+      required:
+        - id
+        - nombre
+        - descripcion
+        - precioUnitario
+        - stock
+        - imagenes
+      properties:
+
+        id:
+          type: integer
+          format: int64
+          example: 1
+
+        nombre:
+          type: string
+          example: Notebook Lenovo ThinkPad
+
+        descripcion:
+          type: string
+          example: Notebook Intel i7 16GB RAM
+
+        precioUnitario:
+          type: number
+          format: double
+          minimum: 0
+          example: 1250.50
+
+        stock:
+          type: integer
+          minimum: 0
+          example: 15
+
+        imagenes:
+          type: array
+          items:
+            type: string
+            format: uri
+          example:
+            - https://ejemplo.com/imagenes/notebook1.jpg
+            - https://ejemplo.com/imagenes/notebook2.jpg
+            - https://ejemplo.com/imagenes/notebook3.jpg
+
+
+    ProductoRequest:
+      type: object
+      required:
+        - nombre
+        - descripcion
+        - precioUnitario
+        - stock
+        - imagenes
+      properties:
+
+        nombre:
+          type: string
+          example: Notebook Lenovo ThinkPad
+
+        descripcion:
+          type: string
+          example: Notebook Intel i7 16GB RAM
+
+        precioUnitario:
+          type: number
+          format: double
+          minimum: 0
+          example: 1250.50
+
+        stock:
+          type: integer
+          minimum: 0
+          example: 15
+
+        imagenes:
+          type: array
+          items:
+            type: string
+            format: uri
+          example:
+            - https://ejemplo.com/imagenes/notebook1.jpg
+            - https://ejemplo.com/imagenes/notebook2.jpg
+
+
+    ProductoPatch:
+      type: object
+      properties:
+
+        nombre:
+          type: string
+          example: Notebook Lenovo ThinkPad
+
+        descripcion:
+          type: string
+          example: Notebook Intel i7 16GB RAM
+
+        precioUnitario:
+          type: number
+          format: double
+          minimum: 0
+          example: 1250.50
+
+        stock:
+          type: integer
+          minimum: 0
+          example: 15
+
+        imagenes:
+          type: array
+          items:
+            type: string
+            format: uri
+
+
+    IdResponse:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Identificador generado para el recurso.
+          example: 1
+
+
+    MessageResponse:
+      type: object
+      required:
+        - mensaje
+      properties:
+        mensaje:
+          type: string
+          example: "Operación realizada correctamente"
+
+
+    ErrorResponse:
+      type: object
+      required:
+        - mensaje
+      properties:
+        mensaje:
+          type: string
+          example: "Se produjo un error al procesar la solicitud"
+

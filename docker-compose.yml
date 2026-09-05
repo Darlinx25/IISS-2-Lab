@@ -1,0 +1,19 @@
+services:
+
+  productos-api:
+    build:
+      context: ./productos-api
+    container_name: productos-api
+    ports:
+      - "8080:8080"
+
+  ordenes-api:
+    build:
+      context: ./ordenes-api
+    container_name: ordenes-api
+    ports:
+      - "8081:8081"
+    environment:
+      PRODUCTOS_API_URL: "http://productos-api:8080"
+    depends_on:
+      - productos-api
