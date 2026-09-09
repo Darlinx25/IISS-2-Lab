@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,10 +10,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	ordenesdb "ordenes-api/mysql"
 )
 
 const productosAPIURLDefault = "http://localhost:8080"
@@ -24,26 +26,11 @@ var productosAPIURL = func() string {
 	return productosAPIURLDefault
 }()
 
-type ProductoOrden struct {
-	ProductoID int64 `json:"productoId"`
-	Cantidad   int   `json:"cantidad"`
-}
-
-type Orden struct {
-	ID             int64           `json:"id"`
-	Email          string          `json:"email"`
-	DireccionEnvio string          `json:"direccionEnvio"`
-	Telefono       string          `json:"telefono"`
-	Estado         string          `json:"estado"`
-	FechaCreacion  time.Time       `json:"fechaCreacion"`
-	Productos      []ProductoOrden `json:"productos"`
-}
-
 type OrdenRequest struct {
-	Email          string          `json:"email"`
-	DireccionEnvio string          `json:"direccionEnvio"`
-	Telefono       string          `json:"telefono"`
-	Productos      []ProductoOrden `json:"productos"`
+	Email          string                       `json:"email"`
+	DireccionEnvio string                       `json:"direccionEnvio"`
+	Telefono       string                       `json:"telefono"`
+	Productos      []ordenesdb.ProductoOrden    `json:"productos"`
 }
 
 type Producto struct {
@@ -71,7 +58,7 @@ type OrdenDetalle struct {
 	DireccionEnvio string            `json:"direccionEnvio"`
 	Telefono       string            `json:"telefono"`
 	Estado         string            `json:"estado"`
-	FechaCreacion  time.Time         `json:"fechaCreacion"`
+	FechaCreacion  string            `json:"fechaCreacion"`
 	Productos      []ProductoDetalle `json:"productos"`
 }
 
@@ -92,37 +79,53 @@ const (
 	EstadoCancelled  = "Cancelled"
 )
 
-var ordenes = []Orden{
-	{
-		ID:             1001,
-		Email:          "cliente@email.com",
-		DireccionEnvio: "Av. Italia 3333, Maldonado",
-		Telefono:       "+59899111222",
-		Estado:         EstadoCreated,
-		FechaCreacion:  time.Now(),
-		Productos: []ProductoOrden{
-			{
-				ProductoID: 1,
-				Cantidad:   2,
-			},
-		},
-	},
+type Handlers struct {
+	repo ordenesdb.OrdenRepository
 }
 
-var siguienteID int64 = 1002
-
-var mutex sync.RWMutex
-
 func main() {
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "3306")
+	dbName := getEnv("DB_NAME", "ordenes")
+	dbUser := getEnv("DB_USER", "user")
+	dbPass := getEnv("DB_PASSWORD", "password")
+
+	dsn := dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?parseTime=true"
+
+	var db *sql.DB
+	var err error
+
+	for i := 0; i < 30; i++ {
+		db, err = sql.Open("mysql", dsn)
+		if err == nil {
+			err = db.Ping()
+		}
+		if err == nil {
+			break
+		}
+		fmt.Printf("Esperando MySQL... (%d/30)\n", i+1)
+		time.Sleep(2 * time.Second)
+	}
+
+	if err != nil {
+		panic("No se pudo conectar a la base de datos: " + err.Error())
+	}
+
+	defer db.Close()
+
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	repo := ordenesdb.NewOrdenRepository(db)
+	h := &Handlers{repo: repo}
+
 	router := gin.Default()
 
-	router.GET("/api/ordenes", obtenerOrdenes)
-
-	router.POST("/api/ordenes", crearOrden)
-
-	router.GET("/api/ordenes/:id", obtenerOrdenPorID)
-
-	router.GET("/api/ordenes/:id/detalle", obtenerDetalleOrden)
+	router.GET("/api/ordenes", h.obtenerOrdenes)
+	router.POST("/api/ordenes", h.crearOrden)
+	router.GET("/api/ordenes/:id", h.obtenerOrdenPorID)
+	router.GET("/api/ordenes/:id/detalle", h.obtenerDetalleOrden)
 
 	fmt.Println("======================================")
 	fmt.Println("API de Órdenes")
@@ -141,14 +144,18 @@ func main() {
 	}
 }
 
-func obtenerOrdenes(c *gin.Context) {
-	mutex.RLock()
-	defer mutex.RUnlock()
-
+func (h *Handlers) obtenerOrdenes(c *gin.Context) {
+	ordenes, err := h.repo.ObtenerTodas()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al obtener las órdenes",
+		})
+		return
+	}
 	c.JSON(http.StatusOK, ordenes)
 }
 
-func crearOrden(c *gin.Context) {
+func (h *Handlers) crearOrden(c *gin.Context) {
 	var request OrdenRequest
 
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -166,7 +173,6 @@ func crearOrden(c *gin.Context) {
 	}
 
 	for _, item := range request.Productos {
-
 		producto, err := obtenerProductoDesdeAPI(item.ProductoID)
 
 		if err != nil {
@@ -187,73 +193,66 @@ func crearOrden(c *gin.Context) {
 		}
 	}
 
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	orden := Orden{
-		ID:             siguienteID,
+	orden := ordenesdb.Orden{
 		Email:          request.Email,
 		DireccionEnvio: request.DireccionEnvio,
 		Telefono:       request.Telefono,
 		Estado:         EstadoCreated,
-		FechaCreacion:  time.Now(),
+		FechaCreacion:  time.Now().Format("2006-01-02 15:04:05"),
 		Productos:      request.Productos,
 	}
 
-	ordenes = append(ordenes, orden)
+	id, err := h.repo.Crear(orden)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al crear la orden",
+		})
+		return
+	}
 
-	siguienteID++
-
-	c.JSON(http.StatusCreated, IdResponse{
-		ID: orden.ID,
-	})
+	c.JSON(http.StatusCreated, IdResponse{ID: id})
 }
 
-func obtenerOrdenPorID(c *gin.Context) {
+func (h *Handlers) obtenerOrdenPorID(c *gin.Context) {
 	id, ok := obtenerID(c)
-
 	if !ok {
 		return
 	}
 
-	mutex.RLock()
-	defer mutex.RUnlock()
-
-	for _, orden := range ordenes {
-		if orden.ID == id {
-			c.JSON(http.StatusOK, orden)
-			return
-		}
+	orden, err := h.repo.ObtenerPorID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al obtener la orden",
+		})
+		return
 	}
 
-	c.JSON(http.StatusNotFound, ErrorResponse{
-		Mensaje: "No existe una orden con el identificador " +
-			strconv.FormatInt(id, 10),
-	})
+	if orden == nil {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Mensaje: "No existe una orden con el identificador " +
+				strconv.FormatInt(id, 10),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, orden)
 }
 
-func obtenerDetalleOrden(c *gin.Context) {
+func (h *Handlers) obtenerDetalleOrden(c *gin.Context) {
 	id, ok := obtenerID(c)
-
 	if !ok {
 		return
 	}
 
-	mutex.RLock()
-
-	var ordenEncontrada *Orden
-
-	for i := range ordenes {
-		if ordenes[i].ID == id {
-			orden := ordenes[i]
-			ordenEncontrada = &orden
-			break
-		}
+	orden, err := h.repo.ObtenerPorID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al obtener la orden",
+		})
+		return
 	}
 
-	mutex.RUnlock()
-
-	if ordenEncontrada == nil {
+	if orden == nil {
 		c.JSON(http.StatusNotFound, ErrorResponse{
 			Mensaje: "No existe una orden con el identificador " +
 				strconv.FormatInt(id, 10),
@@ -263,8 +262,7 @@ func obtenerDetalleOrden(c *gin.Context) {
 
 	productosDetalle := make([]ProductoDetalle, 0)
 
-	for _, item := range ordenEncontrada.Productos {
-
+	for _, item := range orden.Productos {
 		producto, err := obtenerProductoDesdeAPI(item.ProductoID)
 
 		if err != nil {
@@ -289,12 +287,12 @@ func obtenerDetalleOrden(c *gin.Context) {
 	}
 
 	respuesta := OrdenDetalle{
-		ID:             ordenEncontrada.ID,
-		Email:          ordenEncontrada.Email,
-		DireccionEnvio: ordenEncontrada.DireccionEnvio,
-		Telefono:       ordenEncontrada.Telefono,
-		Estado:         ordenEncontrada.Estado,
-		FechaCreacion:  ordenEncontrada.FechaCreacion,
+		ID:             orden.ID,
+		Email:          orden.Email,
+		DireccionEnvio: orden.DireccionEnvio,
+		Telefono:       orden.Telefono,
+		Estado:         orden.Estado,
+		FechaCreacion:  orden.FechaCreacion,
 		Productos:      productosDetalle,
 	}
 
@@ -351,7 +349,6 @@ func obtenerProductoDesdeAPI(id int64) (*Producto, error) {
 }
 
 func validarOrdenRequest(request OrdenRequest) error {
-
 	if request.Email == "" {
 		return errors.New("el email es obligatorio")
 	}
@@ -373,7 +370,6 @@ func validarOrdenRequest(request OrdenRequest) error {
 	}
 
 	for _, producto := range request.Productos {
-
 		if producto.ProductoID <= 0 {
 			return errors.New(
 				"el identificador del producto debe ser mayor que cero",
@@ -391,7 +387,6 @@ func validarOrdenRequest(request OrdenRequest) error {
 }
 
 func obtenerID(c *gin.Context) (int64, bool) {
-
 	idString := c.Param("id")
 
 	id, err := strconv.ParseInt(idString, 10, 64)
@@ -404,4 +399,11 @@ func obtenerID(c *gin.Context) (int64, bool) {
 	}
 
 	return id, true
+}
+
+func getEnv(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

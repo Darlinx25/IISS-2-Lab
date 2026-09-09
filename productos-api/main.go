@@ -1,22 +1,17 @@
 package main
 
 import (
+	"database/sql"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
-	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
-)
 
-type Producto struct {
-	ID             int64    `json:"id"`
-	Nombre         string   `json:"nombre"`
-	Descripcion    string   `json:"descripcion"`
-	PrecioUnitario float64  `json:"precioUnitario"`
-	Stock          int      `json:"stock"`
-	Imagenes       []string `json:"imagenes"`
-}
+	productosdb "productos-api/mysql"
+)
 
 type ProductoRequest struct {
 	Nombre         string   `json:"nombre"`
@@ -26,66 +21,66 @@ type ProductoRequest struct {
 	Imagenes       []string `json:"imagenes"`
 }
 
-type ProductoPatch struct {
-	Nombre         *string   `json:"nombre"`
-	Descripcion    *string   `json:"descripcion"`
-	PrecioUnitario *float64  `json:"precioUnitario"`
-	Stock          *int      `json:"stock"`
-	Imagenes       *[]string `json:"imagenes"`
-}
-
 type IdResponse struct {
 	ID int64 `json:"id"`
-}
-
-type MessageResponse struct {
-	Mensaje string `json:"mensaje"`
 }
 
 type ErrorResponse struct {
 	Mensaje string `json:"mensaje"`
 }
 
-var productos = []Producto{
-	{
-		ID:             1,
-		Nombre:         "Notebook Lenovo ThinkPad",
-		Descripcion:    "Notebook Intel i7 16GB RAM",
-		PrecioUnitario: 1250.50,
-		Stock:          15,
-		Imagenes: []string{
-			"https://ejemplo.com/imagenes/notebook1.jpg",
-			"https://ejemplo.com/imagenes/notebook2.jpg",
-		},
-	},
-	{
-		ID:             2,
-		Nombre:         "Mouse Logitech",
-		Descripcion:    "Mouse inalámbrico Logitech",
-		PrecioUnitario: 35.90,
-		Stock:          50,
-		Imagenes: []string{
-			"https://ejemplo.com/imagenes/mouse1.jpg",
-		},
-	},
+type MessageResponse struct {
+	Mensaje string `json:"mensaje"`
 }
 
-var mutex sync.RWMutex
-
-var siguienteID int64 = 3
+type Handlers struct {
+	repo productosdb.ProductoRepository
+}
 
 func main() {
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "3306")
+	dbName := getEnv("DB_NAME", "productos")
+	dbUser := getEnv("DB_USER", "user")
+	dbPass := getEnv("DB_PASSWORD", "password")
+
+	dsn := dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?parseTime=true"
+
+	var db *sql.DB
+	var err error
+
+	for i := 0; i < 30; i++ {
+		db, err = sql.Open("mysql", dsn)
+		if err == nil {
+			err = db.Ping()
+		}
+		if err == nil {
+			break
+		}
+		fmt.Printf("Esperando MySQL... (%d/30)\n", i+1)
+		time.Sleep(2 * time.Second)
+	}
+
+	if err != nil {
+		panic("No se pudo conectar a la base de datos: " + err.Error())
+	}
+
+	defer db.Close()
+
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	repo := productosdb.NewProductoRepository(db)
+	h := &Handlers{repo: repo}
+
 	router := gin.Default()
 
-	router.GET("/api/productos", obtenerProductos)
-
-	router.POST("/api/productos", crearProducto)
-
-	router.GET("/api/productos/:id", obtenerProductoPorID)
-
-	router.PUT("/api/productos/:id", actualizarProducto)
-
-	router.PATCH("/api/productos/:id", modificarProducto)
+	router.GET("/api/productos", h.obtenerProductos)
+	router.POST("/api/productos", h.crearProducto)
+	router.GET("/api/productos/:id", h.obtenerProductoPorID)
+	router.PUT("/api/productos/:id", h.actualizarProducto)
+	router.PATCH("/api/productos/:id", h.modificarProducto)
 
 	puerto := os.Getenv("PORT")
 	if puerto == "" {
@@ -97,14 +92,18 @@ func main() {
 	}
 }
 
-func obtenerProductos(c *gin.Context) {
-	mutex.RLock()
-	defer mutex.RUnlock()
-
+func (h *Handlers) obtenerProductos(c *gin.Context) {
+	productos, err := h.repo.ObtenerTodos()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al obtener los productos",
+		})
+		return
+	}
 	c.JSON(http.StatusOK, productos)
 }
 
-func crearProducto(c *gin.Context) {
+func (h *Handlers) crearProducto(c *gin.Context) {
 	var request ProductoRequest
 
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -121,11 +120,7 @@ func crearProducto(c *gin.Context) {
 		return
 	}
 
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	producto := Producto{
-		ID:             siguienteID,
+	producto := productosdb.Producto{
 		Nombre:         request.Nombre,
 		Descripcion:    request.Descripcion,
 		PrecioUnitario: request.PrecioUnitario,
@@ -133,39 +128,43 @@ func crearProducto(c *gin.Context) {
 		Imagenes:       request.Imagenes,
 	}
 
-	productos = append(productos, producto)
-	siguienteID++
+	id, err := h.repo.Crear(producto)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al crear el producto",
+		})
+		return
+	}
 
-	c.JSON(http.StatusCreated, IdResponse{
-		ID: producto.ID,
-	})
+	c.JSON(http.StatusCreated, IdResponse{ID: id})
 }
 
-func obtenerProductoPorID(c *gin.Context) {
+func (h *Handlers) obtenerProductoPorID(c *gin.Context) {
 	id, ok := obtenerID(c)
-
 	if !ok {
 		return
 	}
 
-	mutex.RLock()
-	defer mutex.RUnlock()
-
-	for _, producto := range productos {
-		if producto.ID == id {
-			c.JSON(http.StatusOK, producto)
-			return
-		}
+	producto, err := h.repo.ObtenerPorID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al obtener el producto",
+		})
+		return
 	}
 
-	c.JSON(http.StatusNotFound, ErrorResponse{
-		Mensaje: "No existe un producto con el identificador " + strconv.FormatInt(id, 10),
-	})
+	if producto == nil {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Mensaje: "No existe un producto con el identificador " + strconv.FormatInt(id, 10),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, producto)
 }
 
-func actualizarProducto(c *gin.Context) {
+func (h *Handlers) actualizarProducto(c *gin.Context) {
 	id, ok := obtenerID(c)
-
 	if !ok {
 		return
 	}
@@ -186,37 +185,46 @@ func actualizarProducto(c *gin.Context) {
 		return
 	}
 
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	for i := range productos {
-		if productos[i].ID == id {
-			productos[i].Nombre = request.Nombre
-			productos[i].Descripcion = request.Descripcion
-			productos[i].PrecioUnitario = request.PrecioUnitario
-			productos[i].Stock = request.Stock
-			productos[i].Imagenes = request.Imagenes
-
-			c.JSON(http.StatusOK, MessageResponse{
-				Mensaje: "Producto actualizado correctamente",
-			})
-			return
-		}
+	producto := productosdb.Producto{
+		Nombre:         request.Nombre,
+		Descripcion:    request.Descripcion,
+		PrecioUnitario: request.PrecioUnitario,
+		Stock:          request.Stock,
+		Imagenes:       request.Imagenes,
 	}
 
-	c.JSON(http.StatusNotFound, ErrorResponse{
-		Mensaje: "No existe un producto con el identificador " + strconv.FormatInt(id, 10),
+	err := h.repo.Actualizar(id, producto)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Mensaje: "No existe un producto con el identificador " + strconv.FormatInt(id, 10),
+		})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al actualizar el producto",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, MessageResponse{
+		Mensaje: "Producto actualizado correctamente",
 	})
 }
 
-func modificarProducto(c *gin.Context) {
+func (h *Handlers) modificarProducto(c *gin.Context) {
 	id, ok := obtenerID(c)
-
 	if !ok {
 		return
 	}
 
-	var request ProductoPatch
+	var request struct {
+		Nombre         *string   `json:"nombre"`
+		Descripcion    *string   `json:"descripcion"`
+		PrecioUnitario *float64  `json:"precioUnitario"`
+		Stock          *int      `json:"stock"`
+		Imagenes       *[]string `json:"imagenes"`
+	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -232,41 +240,30 @@ func modificarProducto(c *gin.Context) {
 		return
 	}
 
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	for i := range productos {
-		if productos[i].ID == id {
-
-			if request.Nombre != nil {
-				productos[i].Nombre = *request.Nombre
-			}
-
-			if request.Descripcion != nil {
-				productos[i].Descripcion = *request.Descripcion
-			}
-
-			if request.PrecioUnitario != nil {
-				productos[i].PrecioUnitario = *request.PrecioUnitario
-			}
-
-			if request.Stock != nil {
-				productos[i].Stock = *request.Stock
-			}
-
-			if request.Imagenes != nil {
-				productos[i].Imagenes = *request.Imagenes
-			}
-
-			c.JSON(http.StatusOK, MessageResponse{
-				Mensaje: "Producto modificado correctamente",
-			})
-			return
-		}
+	patch := productosdb.ProductoPatch{
+		Nombre:         request.Nombre,
+		Descripcion:    request.Descripcion,
+		PrecioUnitario: request.PrecioUnitario,
+		Stock:          request.Stock,
+		Imagenes:       request.Imagenes,
 	}
 
-	c.JSON(http.StatusNotFound, ErrorResponse{
-		Mensaje: "No existe un producto con el identificador " + strconv.FormatInt(id, 10),
+	err := h.repo.Modificar(id, patch)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Mensaje: "No existe un producto con el identificador " + strconv.FormatInt(id, 10),
+		})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al modificar el producto",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, MessageResponse{
+		Mensaje: "Producto modificado correctamente",
 	})
 }
 
@@ -309,7 +306,13 @@ func validarProductoRequest(request ProductoRequest) error {
 	return nil
 }
 
-func validarProductoPatch(request ProductoPatch) error {
+func validarProductoPatch(request struct {
+	Nombre         *string   `json:"nombre"`
+	Descripcion    *string   `json:"descripcion"`
+	PrecioUnitario *float64  `json:"precioUnitario"`
+	Stock          *int      `json:"stock"`
+	Imagenes       *[]string `json:"imagenes"`
+}) error {
 	if request.PrecioUnitario != nil && *request.PrecioUnitario < 0 {
 		return errorString("El precio unitario no puede ser negativo")
 	}
@@ -319,6 +322,13 @@ func validarProductoPatch(request ProductoPatch) error {
 	}
 
 	return nil
+}
+
+func getEnv(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }
 
 type errorString string

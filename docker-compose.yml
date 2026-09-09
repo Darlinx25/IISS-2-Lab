@@ -1,11 +1,58 @@
 services:
 
+  productos-db:
+    image: mysql:8.0
+    container_name: productos-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: productos
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+    ports:
+      - "3306:3306"
+    volumes:
+      - productos_data:/var/lib/mysql
+      - ./db/productos/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   productos-api:
     build:
       context: ./productos-api
     container_name: productos-api
     ports:
       - "8080:8080"
+    environment:
+      DB_HOST: productos-db
+      DB_PORT: "3306"
+      DB_NAME: productos
+      DB_USER: user
+      DB_PASSWORD: password
+    depends_on:
+      productos-db:
+        condition: service_healthy
+
+  ordenes-db:
+    image: mysql:8.0
+    container_name: ordenes-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: ordenes
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+    ports:
+      - "3307:3306"
+    volumes:
+      - ordenes_data:/var/lib/mysql
+      - ./db/ordenes/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   ordenes-api:
     build:
@@ -14,6 +61,18 @@ services:
     ports:
       - "8081:8081"
     environment:
+      DB_HOST: ordenes-db
+      DB_PORT: "3306"
+      DB_NAME: ordenes
+      DB_USER: user
+      DB_PASSWORD: password
       PRODUCTOS_API_URL: "http://productos-api:8080"
     depends_on:
-      - productos-api
+      ordenes-db:
+        condition: service_healthy
+      productos-api:
+        condition: service_started
+
+volumes:
+  productos_data:
+  ordenes_data:
