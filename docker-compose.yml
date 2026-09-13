@@ -54,6 +54,14 @@ services:
       timeout: 3s
       retries: 10
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
   ordenes-api:
     build:
       context: ./ordenes-api
@@ -67,10 +75,13 @@ services:
       DB_USER: user
       DB_PASSWORD: password
       PRODUCTOS_API_URL: "http://productos-api:8080"
+      MQTT_BROKER_URL: "tcp://mosquitto:1883"
     depends_on:
       ordenes-db:
         condition: service_healthy
       productos-api:
+        condition: service_started
+      mosquitto:
         condition: service_started
 
 volumes:

@@ -1,5 +1,6 @@
 package main
 
+
 import (
 	"database/sql"
 	"encoding/json"
@@ -13,11 +14,17 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 
 	ordenesdb "ordenes-api/mysql"
 )
 
 const productosAPIURLDefault = "http://localhost:8080"
+
+const (
+	mqttBrokerDefault = "tcp://localhost:1883"
+	mqttTopicOrdenes  = "ordenes/para-procesar"
+)
 
 var productosAPIURL = func() string {
 	if url := os.Getenv("PRODUCTOS_API_URL"); url != "" {
@@ -25,6 +32,8 @@ var productosAPIURL = func() string {
 	}
 	return productosAPIURLDefault
 }()
+
+var mqttBrokerURL = getEnv("MQTT_BROKER_URL", mqttBrokerDefault)
 
 type OrdenRequest struct {
 	Email          string                       `json:"email"`
@@ -62,6 +71,12 @@ type OrdenDetalle struct {
 	Productos      []ProductoDetalle `json:"productos"`
 }
 
+type MensajeOrden struct {
+	ID            int64  `json:"id"`
+	Estado        string `json:"estado"`
+	FechaCreacion string `json:"fechaCreacion"`
+}
+
 type IdResponse struct {
 	ID int64 `json:"id"`
 }
@@ -71,16 +86,25 @@ type ErrorResponse struct {
 }
 
 const (
-	EstadoCreated    = "Created"
-	EstadoConfirmed  = "Confirmed"
-	EstadoProcessing = "Processing"
-	EstadoShipped    = "Shipped"
-	EstadoDelivered  = "Delivered"
-	EstadoCancelled  = "Cancelled"
+	EstadoCreated        = "Created"
+	EstadoConfirmed      = "Confirmed"
+	EstadoProcessing     = "Processing"
+	EstadoReadyToDelivery = "Ready to Delivery"
+	EstadoNoStock        = "No Stock"
+	EstadoShipped        = "Shipped"
+	EstadoDelivered      = "Delivered"
+	EstadoCancelled      = "Cancelled"
 )
 
+var estadosActualizables = map[string]bool{
+	EstadoProcessing:      true,
+	EstadoReadyToDelivery: true,
+	EstadoNoStock:         true,
+}
+
 type Handlers struct {
-	repo ordenesdb.OrdenRepository
+	repo       ordenesdb.OrdenRepository
+	mqttClient mqtt.Client
 }
 
 func main() {
@@ -118,7 +142,7 @@ func main() {
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	repo := ordenesdb.NewOrdenRepository(db)
-	h := &Handlers{repo: repo}
+	h := &Handlers{repo: repo, mqttClient: conectarMQTT()}
 
 	router := gin.Default()
 
@@ -126,12 +150,14 @@ func main() {
 	router.POST("/api/ordenes", h.crearOrden)
 	router.GET("/api/ordenes/:id", h.obtenerOrdenPorID)
 	router.GET("/api/ordenes/:id/detalle", h.obtenerDetalleOrden)
+	router.PATCH("/api/ordenes/:id", h.modificarEstadoOrden)
 
 	fmt.Println("======================================")
 	fmt.Println("API de Órdenes")
 	fmt.Println("======================================")
 	fmt.Println("Servidor escuchando en:")
 	fmt.Println("http://localhost:8081")
+	fmt.Println("MQTT broker:", mqttBrokerURL)
 	fmt.Println("======================================")
 
 	puerto := os.Getenv("PORT")
@@ -142,6 +168,30 @@ func main() {
 	if err := router.Run(":" + puerto); err != nil {
 		panic(err)
 	}
+}
+
+func conectarMQTT() mqtt.Client {
+	opts := mqtt.NewClientOptions().
+		AddBroker(mqttBrokerURL).
+		SetClientID("ordenes-api").
+		SetKeepAlive(30 * time.Second).
+		SetPingTimeout(10 * time.Second).
+		SetConnectTimeout(3 * time.Second).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(2 * time.Second)
+
+	client := mqtt.NewClient(opts)
+
+	token := client.Connect()
+	token.WaitTimeout(3 * time.Second)
+
+	if token.Error() != nil {
+		fmt.Printf("MQTT no disponible en %s (%v). Se reintentará en segundo plano.\n", mqttBrokerURL, token.Error())
+	} else {
+		fmt.Println("MQTT conectado en", mqttBrokerURL)
+	}
+
+	return client
 }
 
 func (h *Handlers) obtenerOrdenes(c *gin.Context) {
@@ -193,12 +243,14 @@ func (h *Handlers) crearOrden(c *gin.Context) {
 		}
 	}
 
+	ahora := time.Now()
+
 	orden := ordenesdb.Orden{
 		Email:          request.Email,
 		DireccionEnvio: request.DireccionEnvio,
 		Telefono:       request.Telefono,
 		Estado:         EstadoCreated,
-		FechaCreacion:  time.Now().Format("2006-01-02 15:04:05"),
+		FechaCreacion:  ahora.Format("2006-01-02 15:04:05"),
 		Productos:      request.Productos,
 	}
 
@@ -210,7 +262,80 @@ func (h *Handlers) crearOrden(c *gin.Context) {
 		return
 	}
 
+	h.publicarOrden(id, ahora)
+
 	c.JSON(http.StatusCreated, IdResponse{ID: id})
+}
+
+func (h *Handlers) publicarOrden(id int64, momento time.Time) {
+	if h.mqttClient == nil {
+		return
+	}
+
+	mensaje := MensajeOrden{
+		ID:            id,
+		Estado:        EstadoCreated,
+		FechaCreacion: momento.Format(time.RFC3339),
+	}
+
+	payload, err := json.Marshal(mensaje)
+	if err != nil {
+		fmt.Printf("Error serializando la orden %d: %v\n", id, err)
+		return
+	}
+
+	token := h.mqttClient.Publish(mqttTopicOrdenes, 1, false, payload)
+	token.WaitTimeout(3 * time.Second)
+
+	if token.Error() != nil {
+		fmt.Printf("Error publicando la orden %d en MQTT: %v\n", id, token.Error())
+		return
+	}
+
+	fmt.Printf("Orden %d publicada en el topic '%s'\n", id, mqttTopicOrdenes)
+}
+
+func (h *Handlers) modificarEstadoOrden(c *gin.Context) {
+	id, ok := obtenerID(c)
+	if !ok {
+		return
+	}
+
+	var request struct {
+		Estado string `json:"estado"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil || !estadosActualizables[request.Estado] {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Mensaje: "El estado de la orden es inválido",
+		})
+		return
+	}
+
+	err := h.repo.CambiarEstado(id, request.Estado)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Mensaje: "No existe una orden con el identificador " +
+				strconv.FormatInt(id, 10),
+		})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al modificar la orden",
+		})
+		return
+	}
+
+	orden, err := h.repo.ObtenerPorID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al obtener la orden",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, orden)
 }
 
 func (h *Handlers) obtenerOrdenPorID(c *gin.Context) {

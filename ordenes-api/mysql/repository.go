@@ -26,6 +26,7 @@ type OrdenRepository interface {
 	ObtenerTodas() ([]Orden, error)
 	ObtenerPorID(id int64) (*Orden, error)
 	Crear(o Orden) (int64, error)
+	CambiarEstado(id int64, estado string) error
 }
 
 type mysqlOrdenRepository struct {
@@ -141,5 +142,26 @@ func (r *mysqlOrdenRepository) insertarProductosOrdenTx(tx *sql.Tx, ordenID int6
 			return err
 		}
 	}
+	return nil
+}
+
+func (r *mysqlOrdenRepository) CambiarEstado(id int64, estado string) error {
+	result, err := r.db.Exec(
+		"UPDATE ordenes SET estado = ? WHERE id = ?",
+		estado, id,
+	)
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+
 	return nil
 }
