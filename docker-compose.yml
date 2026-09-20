@@ -84,6 +84,23 @@ services:
       mosquitto:
         condition: service_started
 
+  procesador-api:
+    build:
+      context: ./procesador-api
+    container_name: procesador-api
+    environment:
+      MQTT_BROKER_URL: "tcp://mosquitto:1883"
+      ORDENES_API_URL: "http://ordenes-api:8081"
+      PRODUCTOS_API_URL: "http://productos-api:8080"
+    depends_on:
+      mosquitto:
+        condition: service_started
+      ordenes-api:
+        condition: service_started
+      productos-api:
+        condition: service_started
+
+        
 volumes:
   productos_data:
   ordenes_data:

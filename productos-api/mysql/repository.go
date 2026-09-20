@@ -2,10 +2,16 @@ package mysql
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
+)
+
+var (
+	ErrProductoNoExiste = errors.New("el producto no existe")
+	ErrStockInsuficiente = errors.New("stock insuficiente")
 )
 
 type Producto struct {
@@ -31,6 +37,7 @@ type ProductoRepository interface {
 	Crear(p Producto) (int64, error)
 	Actualizar(id int64, p Producto) error
 	Modificar(id int64, patch ProductoPatch) error
+	DecrementarStock(id int64, cantidad int) error
 }
 
 type mysqlProductoRepository struct {
@@ -197,6 +204,34 @@ func (r *mysqlProductoRepository) Modificar(id int64, patch ProductoPatch) error
 	}
 
 	return tx.Commit()
+}
+
+func (r *mysqlProductoRepository) DecrementarStock(id int64, cantidad int) error {
+	result, err := r.db.Exec(
+		"UPDATE productos SET stock = stock - ? WHERE id = ? AND stock >= ?",
+		cantidad, id, cantidad,
+	)
+	if err != nil {
+		return err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rows == 0 {
+		producto, err := r.ObtenerPorID(id)
+		if err != nil {
+			return err
+		}
+		if producto == nil {
+			return ErrProductoNoExiste
+		}
+		return ErrStockInsuficiente
+	}
+
+	return nil
 }
 
 func (r *mysqlProductoRepository) obtenerImagenes(productoID int64) ([]string, error) {

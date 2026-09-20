@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -81,6 +82,7 @@ func main() {
 	router.GET("/api/productos/:id", h.obtenerProductoPorID)
 	router.PUT("/api/productos/:id", h.actualizarProducto)
 	router.PATCH("/api/productos/:id", h.modificarProducto)
+	router.POST("/api/productos/:id/decrementar-stock", h.decrementarStock)
 
 	puerto := os.Getenv("PORT")
 	if puerto == "" {
@@ -264,6 +266,50 @@ func (h *Handlers) modificarProducto(c *gin.Context) {
 
 	c.JSON(http.StatusOK, MessageResponse{
 		Mensaje: "Producto modificado correctamente",
+	})
+}
+
+func (h *Handlers) decrementarStock(c *gin.Context) {
+	id, ok := obtenerID(c)
+	if !ok {
+		return
+	}
+
+	var request struct {
+		Cantidad int `json:"cantidad"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil || request.Cantidad < 1 {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Mensaje: "La cantidad debe ser mayor o igual a 1",
+		})
+		return
+	}
+
+	err := h.repo.DecrementarStock(id, request.Cantidad)
+
+	switch {
+	case errors.Is(err, productosdb.ErrProductoNoExiste):
+		c.JSON(http.StatusNotFound, ErrorResponse{
+			Mensaje: "No existe un producto con el identificador " + strconv.FormatInt(id, 10),
+		})
+		return
+
+	case errors.Is(err, productosdb.ErrStockInsuficiente):
+		c.JSON(http.StatusConflict, ErrorResponse{
+			Mensaje: "Stock insuficiente para el producto con identificador " + strconv.FormatInt(id, 10),
+		})
+		return
+
+	case err != nil:
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Mensaje: "Error al decrementar el stock",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, MessageResponse{
+		Mensaje: "Stock decrementado correctamente",
 	})
 }
 
