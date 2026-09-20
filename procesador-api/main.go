@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,12 +12,15 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/gin-gonic/gin"
+	_ "github.com/go-sql-driver/mysql"
+	facturasdb "procesador-api/mysql"
 )
 
 const (
-	mqttBrokerDefault    = "tcp://localhost:1883"
-	mqttTopicOrdenes     = "ordenes/para-procesar"
-	ordenesAPIURLDefault  = "http://localhost:8081"
+	mqttBrokerDefault      = "tcp://localhost:1883"
+	mqttTopicOrdenes       = "ordenes/para-procesar"
+	ordenesAPIURLDefault   = "http://localhost:8081"
 	productosAPIURLDefault = "http://localhost:8080"
 )
 
@@ -29,6 +33,8 @@ const (
 var ordenesAPIURL = getEnv("ORDENES_API_URL", ordenesAPIURLDefault)
 var productosAPIURL = getEnv("PRODUCTOS_API_URL", productosAPIURLDefault)
 var mqttBrokerURL = getEnv("MQTT_BROKER_URL", mqttBrokerDefault)
+
+var facturaRepo facturasdb.FacturaRepository
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
@@ -65,6 +71,7 @@ type Producto struct {
 func main() {
 	client := conectarMQTT()
 	suscribirse(client)
+	conectarFacturasDB()
 
 	fmt.Println("======================================")
 	fmt.Println("Procesador de órdenes")
@@ -73,6 +80,8 @@ func main() {
 	fmt.Println("Ordenes API:", ordenesAPIURL)
 	fmt.Println("Productos API:", productosAPIURL)
 	fmt.Println("======================================")
+
+	go iniciarServidorHTTP()
 
 	select {}
 }
@@ -99,6 +108,42 @@ func conectarMQTT() mqtt.Client {
 	}
 
 	return client
+}
+
+func conectarFacturasDB() {
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "3306")
+	dbName := getEnv("DB_NAME", "facturas")
+	dbUser := getEnv("DB_USER", "user")
+	dbPass := getEnv("DB_PASSWORD", "password")
+
+	dsn := dbUser + ":" + dbPass + "@tcp(" + dbHost + ":" + dbPort + ")/" + dbName + "?parseTime=true"
+
+	var db *sql.DB
+	var err error
+
+	for i := 0; i < 30; i++ {
+		db, err = sql.Open("mysql", dsn)
+		if err == nil {
+			err = db.Ping()
+		}
+		if err == nil {
+			break
+		}
+		fmt.Printf("Esperando facturas-db... (%d/30)\n", i+1)
+		time.Sleep(2 * time.Second)
+	}
+
+	if err != nil {
+		panic("No se pudo conectar a facturas-db: " + err.Error())
+	}
+
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	facturaRepo = facturasdb.NewFacturaRepository(db)
+	fmt.Println("Conectado a facturas-db")
 }
 
 func suscribirse(client mqtt.Client) {
@@ -142,6 +187,8 @@ func procesar(id int64) error {
 		return nil
 	}
 
+	detalles := make([]facturasdb.ItemFactura, 0, len(orden.Productos))
+
 	for _, item := range orden.Productos {
 		producto, err := obtenerProductoDeAPI(item.ProductoID)
 		if err != nil {
@@ -152,16 +199,41 @@ func procesar(id int64) error {
 			fmt.Printf("Orden %d sin stock: producto %d (stock %d < %d)\n", id, item.ProductoID, producto.Stock, item.Cantidad)
 			return cambiarEstadoOrden(id, EstadoNoStock)
 		}
+
+		detalles = append(detalles, facturasdb.ItemFactura{
+			ProductoID:     item.ProductoID,
+			Cantidad:       item.Cantidad,
+			PrecioUnitario: producto.PrecioUnitario,
+		})
 	}
 
-	for _, item := range orden.Productos {
-		if err := decrementarStockDeAPI(item.ProductoID, item.Cantidad); err != nil {
+	for _, d := range detalles {
+		if err := decrementarStockDeAPI(d.ProductoID, d.Cantidad); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("Orden %d con stock: marcada como lista para entrega\n", id)
-	return cambiarEstadoOrden(id, EstadoReadyToDelivery)
+	if err := cambiarEstadoOrden(id, EstadoReadyToDelivery); err != nil {
+		return err
+	}
+
+	return generarFactura(id, detalles)
+}
+
+func generarFactura(ordenID int64, items []facturasdb.ItemFactura) error {
+	var total float64
+	for _, item := range items {
+		total += float64(item.Cantidad) * item.PrecioUnitario
+	}
+
+	id, err := facturaRepo.Guardar(ordenID, total, items)
+	if err != nil {
+		return fmt.Errorf("no se pudo generar la factura de la orden %d: %v", ordenID, err)
+	}
+
+	fmt.Printf("Factura %d generada para la orden %d (total %.2f)\n", id, ordenID, total)
+	return nil
 }
 
 func peticion(method, url string, body []byte) (*http.Response, error) {
@@ -274,4 +346,69 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func iniciarServidorHTTP() {
+	router := gin.Default()
+
+	router.GET("/api/facturas", handlerListarFacturas)
+	router.GET("/api/facturas/:id", handlerObtenerFactura)
+	router.GET("/api/ordenes/:ordenId/factura", handlerFacturaPorOrden)
+
+	addr := ":" + getEnv("PORT", "8082")
+	fmt.Println("Servidor de facturas en http://localhost" + addr)
+	if err := router.Run(addr); err != nil {
+		fmt.Println("Error en el servidor HTTP de facturas:", err)
+	}
+}
+
+func handlerListarFacturas(c *gin.Context) {
+	facturas, err := facturaRepo.ListarFacturas()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"mensaje": "Error al listar las facturas: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, facturas)
+}
+
+func handlerObtenerFactura(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"mensaje": "El identificador de la factura es inválido"})
+		return
+	}
+
+	factura, err := facturaRepo.ObtenerFactura(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"mensaje": "Error al obtener la factura: " + err.Error()})
+		return
+	}
+
+	if factura == nil {
+		c.JSON(http.StatusNotFound, gin.H{"mensaje": "La factura no existe"})
+		return
+	}
+
+	c.JSON(http.StatusOK, factura)
+}
+
+func handlerFacturaPorOrden(c *gin.Context) {
+	ordenID, err := strconv.ParseInt(c.Param("ordenId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"mensaje": "El identificador de la orden es inválido"})
+		return
+	}
+
+	factura, err := facturaRepo.ObtenerFacturaPorOrden(ordenID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"mensaje": "Error al obtener la factura: " + err.Error()})
+		return
+	}
+
+	if factura == nil {
+		c.JSON(http.StatusNotFound, gin.H{"mensaje": "La orden no tiene factura asociada"})
+		return
+	}
+
+	c.JSON(http.StatusOK, factura)
 }

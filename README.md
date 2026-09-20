@@ -22,14 +22,45 @@ iiss2-apis/
 │   ├── main.go
 │   └── test-api.sh
 │
-└── productos-api/
-    ├── Dockerfile
-    ├── go.mod
-    ├── go.sum
-    ├── main.go
-    └── test-api.sh
+├── productos-api/
+│   ├── Dockerfile
+│   ├── go.mod
+│   ├── go.sum
+│   ├── main.go
+│   └── test-api.sh
+│
+├── procesador-api/
+│   ├── Dockerfile
+│   ├── go.mod
+│   ├── go.sum
+│   ├── main.go
+│   └── test-api.sh
+│
+├── db/
+│   ├── productos/
+│   │   └── init.sql
+│   ├── ordenes/
+│   │   └── init.sql
+│   └── facturas/
+│       └── init.sql
+│
+└── mosquitto/
+    └── config/
+        └── mosquitto.conf
 ```
-  ### API de Productos
+
+### Flujo de procesamiento (MQTT)
+
+Al crear una orden en `ordenes-api` (estado `Created`), la API publica un mensaje en el topic `ordenes/para-procesar` con QoS 1. El servicio `procesador-api` consume el mensaje y:
+
+1. Verifica el stock de cada producto contra `productos-api`.
+2. Si falta stock, marca la orden como `No Stock` (no genera factura).
+3. Si hay stock, decrementa el stock y marca la orden como `Ready to Delivery`.
+4. Genera la factura en `facturas-db` (encabezado + ítems con `cantidad` y `precio_unitario`; `monto_total = Σ cantidad × precio_unitario`).
+
+Las facturas se consultan a través de `procesador-api` (puerto `8082`), sin acceso directo a la base.
+
+### API de Productos
 
 Pruebas básicas de creación, consulta, actualización y manejo de errores de la API de productos.
 
@@ -247,4 +278,38 @@ Intentar obtener el detalle de una orden que no existe.
 
 ```bash
 curl -s -w "\n[HTTP %{http_code}]\n" http://localhost:8081/api/ordenes/999/detalle
+```
+
+### API de Facturas (Procesador)
+
+El servicio `procesador-api` procesa las órdenes vía MQTT y expone las facturas generadas en el puerto `8082`.
+
+Obtener la factura de una orden.
+
+```bash
+curl -s -w "\n[HTTP %{http_code}]\n" http://localhost:8082/api/ordenes/1002/factura
+```
+
+Obtener todas las facturas.
+
+```bash
+curl -s -w "\n[HTTP %{http_code}]\n" http://localhost:8082/api/facturas
+```
+
+Obtener una factura por ID.
+
+```bash
+curl -s -w "\n[HTTP %{http_code}]\n" http://localhost:8082/api/facturas/1
+```
+
+Intentar obtener una factura que no existe.
+
+```bash
+curl -s -w "\n[HTTP %{http_code}]\n" http://localhost:8082/api/facturas/999
+```
+
+Publicar un mensaje manualmente (caso "sin stock" o reprocesamiento).
+
+```bash
+docker exec mosquitto mosquitto_pub -t "ordenes/para-procesar" -m '{"id":9999,"estado":"Created"}' -q 1
 ```

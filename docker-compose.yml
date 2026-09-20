@@ -88,10 +88,17 @@ services:
     build:
       context: ./procesador-api
     container_name: procesador-api
+    ports:
+      - "8082:8082"
     environment:
       MQTT_BROKER_URL: "tcp://mosquitto:1883"
       ORDENES_API_URL: "http://ordenes-api:8081"
       PRODUCTOS_API_URL: "http://productos-api:8080"
+      DB_HOST: facturas-db
+      DB_PORT: "3306"
+      DB_NAME: facturas
+      DB_USER: user
+      DB_PASSWORD: password
     depends_on:
       mosquitto:
         condition: service_started
@@ -99,8 +106,31 @@ services:
         condition: service_started
       productos-api:
         condition: service_started
+      facturas-db:
+        condition: service_healthy
 
-        
+  facturas-db:
+    image: mysql:8.0
+    container_name: facturas-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: facturas
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+    ports:
+      - "3308:3306"
+    volumes:
+      - facturas_data:/var/lib/mysql
+      - ./db/facturas/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      
+
 volumes:
   productos_data:
   ordenes_data:
+  facturas_data:
+  
