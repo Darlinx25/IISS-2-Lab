@@ -6,7 +6,8 @@
 
 ### MER
 
-<img width="1129" height="973" alt="image" src="https://github.com/user-attachments/assets/35cf23f6-3662-447d-8bfb-3d563a14c3b1" />
+<img width="957" height="970" alt="image" src="https://github.com/user-attachments/assets/e0e32941-a77c-471f-8df9-2918f7387a52" />
+
 
 ### Estructura del proyecto
 ```
