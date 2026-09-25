@@ -58,11 +58,11 @@ Interfaz web:
 1. Al hacer docker compose up, en los logs de Jenkins obtenemos la password temporal de admin que nos pide para logearnos.
 2. Luego en la interfaz web de Jenkins instalamos lo recomendado en la primera vez iniciada.
 3. Creamos job tipo pipeline.
-4. Pegamos contenido de Jenkinsfile en la sección script para que el job lo use y ponemos guardar.
-5. Poner el codigo nuevo en el directorio jenkins/entradas/nueva version/
+4. Pegamos contenido de `Jenkinsfile` en la sección script para que el job lo use y ponemos guardar.
+5. Poner el codigo nuevo en el directorio `jenkins/entradas/nueva version/`
 6. Luego hacemos build now, y esperamos que realize el job y vemos si es fail o success.
 
-Si todo sale bien Jenkins copiará el código que colocamos en entradas/ al directorio deploy/
+Si todo sale bien Jenkins copiará el código que colocamos en `entradas/` al directorio `deploy/`
 
 ### Flujo de procesamiento (MQTT)
 
