@@ -1,0 +1,32 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'VERSION',
+            defaultValue: 'nueva version',
+            description: 'Version del sistema a copiar (carpeta dentro de jenkins/entradas)'
+        )
+    }
+
+    stages {
+        stage('Copiar nueva version') {
+            steps {
+                script {
+                    def entrada = "/var/jenkins_home/entradas/${params.VERSION}"
+                    def destino = "/var/jenkins_home/deploy"
+
+                    sh """
+                        if [ ! -d "${entrada}" ]; then
+                            echo "ERROR: la version ${params.VERSION} no existe en ${entrada}"
+                            exit 1
+                        fi
+                        find "${destino}" -mindepth 1 -delete
+                        cp -r "${entrada}/." "${destino}/"
+                        echo "Version ${params.VERSION} copiada a ${destino}"
+                    """
+                }
+            }
+        }
+    }
+}

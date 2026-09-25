@@ -127,10 +127,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-      
+
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    user: root
+    ports:
+      - "8090:8080"
+    volumes:
+      - jenkins_data:/var/jenkins_home
+      - ./jenkins/entradas:/var/jenkins_home/entradas
+      - ./deploy:/var/jenkins_home/deploy
 
 volumes:
   productos_data:
   ordenes_data:
   facturas_data:
+  jenkins_data:
   

@@ -1,3 +1,5 @@
 binarios
 *.exe
 *.zip
+/deploy/
+/jenkins/entradas/
