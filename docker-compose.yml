@@ -138,7 +138,20 @@ services:
       - jenkins_data:/var/jenkins_home
       - ./jenkins/entradas:/var/jenkins_home/entradas
       - ./deploy:/var/jenkins_home/deploy
-
+  web:
+    build:
+      context: ./web
+    container_name: web
+    ports:
+      - "8083:80"
+    depends_on:
+      ordenes-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 volumes:
   productos_data:
   ordenes_data:

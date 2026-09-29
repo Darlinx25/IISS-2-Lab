@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ordenes de Compra</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <main class="contenedor">
+        <header class="cabecera">
+            <h1>Ordenes de Compra</h1>
+            <button id="btn-recargar" class="btn-recargar">Recargar</button>
+        </header>
+
+        <div id="mensaje-error" class="alerta error" hidden></div>
+
+        <div class="tarjeta">
+            <table class="tabla">
+                <thead>
+                    <tr>
+                        <th>Id</th>
+                        <th>Email</th>
+                        <th>Telefono</th>
+                        <th>Status</th>
+                        <th>Fecha creacion</th>
+                    </tr>
+                </thead>
+                <tbody id="tabla-ordenes">
+                    <!-- aca app.js inyecta las filas -->
+                </tbody>
+            </table>
+
+            <p id="sin-datos" class="sin-datos" hidden>No hay ordenes para mostrar.</p>
+        </div>
+
+        <p class="pie">Datos obtenidos desde <code>GET /api/ordenes</code> (ordenes-api).</p>
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+</html>
