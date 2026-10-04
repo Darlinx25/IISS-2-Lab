@@ -3,6 +3,7 @@ package mysql
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -25,8 +26,11 @@ type Orden struct {
 type OrdenRepository interface {
 	ObtenerTodas() ([]Orden, error)
 	ObtenerPorID(id int64) (*Orden, error)
+	ObtenerPorEstado(estado string) ([]Orden, error)
 	Crear(o Orden) (int64, error)
 	CambiarEstado(id int64, estado string) error
+	ConfirmarPublicada(id int64, desde, hasta string) (bool, error)
+	ReclamarEstado(id int64, desde []string, hasta string) (bool, error)
 }
 
 type mysqlOrdenRepository struct {
@@ -79,6 +83,29 @@ func (r *mysqlOrdenRepository) ObtenerPorID(id int64) (*Orden, error) {
 	}
 	o.Productos = productos
 	return &o, nil
+}
+
+func (r *mysqlOrdenRepository) ObtenerPorEstado(estado string) ([]Orden, error) {
+	rows, err := r.db.Query(
+		"SELECT id, email, direccion_envio, telefono, estado, fecha_creacion FROM ordenes WHERE estado = ? ORDER BY id",
+		estado,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ordenes []Orden
+
+	for rows.Next() {
+		var o Orden
+		if err := rows.Scan(&o.ID, &o.Email, &o.DireccionEnvio, &o.Telefono, &o.Estado, &o.FechaCreacion); err != nil {
+			return nil, err
+		}
+		ordenes = append(ordenes, o)
+	}
+
+	return ordenes, rows.Err()
 }
 
 func (r *mysqlOrdenRepository) Crear(o Orden) (int64, error) {
@@ -164,4 +191,38 @@ func (r *mysqlOrdenRepository) CambiarEstado(id int64, estado string) error {
 	}
 
 	return nil
+}
+
+func (r *mysqlOrdenRepository) ConfirmarPublicada(id int64, desde, hasta string) (bool, error) {
+	return r.ReclamarEstado(id, []string{desde}, hasta)
+}
+
+func (r *mysqlOrdenRepository) ReclamarEstado(id int64, desde []string, hasta string) (bool, error) {
+	if len(desde) == 0 {
+		return false, fmt.Errorf("reclamar estado sin estados de origen")
+	}
+
+	placeholders := make([]string, len(desde))
+	args := make([]interface{}, 0, len(desde)+2)
+	args = append(args, hasta, id)
+
+	for i, estado := range desde {
+		placeholders[i] = "?"
+		args = append(args, estado)
+	}
+
+	query := "UPDATE ordenes SET estado = ? WHERE id = ? AND estado IN (" +
+		strings.Join(placeholders, ", ") + ")"
+
+	result, err := r.db.Exec(query, args...)
+	if err != nil {
+		return false, err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rows > 0, nil
 }

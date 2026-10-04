@@ -197,8 +197,11 @@ components:
           type: string
           enum:
             - Created
+            - Pendiente Mosquitto
             - Confirmed
             - Processing
+            - Ready to Delivery
+            - No Stock
             - Shipped
             - Delivered
             - Cancelled
@@ -315,8 +318,11 @@ components:
           type: string
           enum:
             - Created
+            - Pendiente Mosquitto
             - Confirmed
             - Processing
+            - Ready to Delivery
+            - No Stock
             - Shipped
             - Delivered
             - Cancelled

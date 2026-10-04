@@ -76,4 +76,77 @@ run curl -s -w "\n[HTTP %{http_code}]\n" "$BASE_URL_PRODUCTOS/api/productos/1"
 run curl -s -w "\n[HTTP %{http_code}]\n" "$BASE_URL_FACTURAS/api/ordenes/$ORDER_ID/factura"
 
 echo ""
+echo "--- 11. Caida del broker: la orden no se debe perder ---"
+
+estado() {
+  curl -s "$BASE_URL_ORDENES/api/ordenes/$1" | sed -n 's/.*"Estado":"\([^"]*\)".*/\1/p'
+}
+
+stock() {
+  curl -s "$BASE_URL_PRODUCTOS/api/productos/$1" | sed -n 's/.*"Stock": *\([0-9][0-9]*\).*/\1/p'
+}
+
+fallos=0
+check() {
+  if [ "$2" = "$3" ]; then
+    echo "  OK   $1: $2"
+  else
+    echo "  FALLA $1: se esperaba '$3' y se obtuvo '$2'"
+    fallos=$((fallos + 1))
+  fi
+}
+
+echo "Stock inicial del producto 1: $(stock 1)"
+STOCK_ANTES=$(stock 1)
+
+echo "Deteniendo el broker MQTT..."
+run docker stop mosquitto
+sleep 3
+
+echo "Creando una orden con el broker caido (debe quedar pendiente):"
+RESP=$(curl -s -w "\n[HTTP %{http_code}]" -X POST "$BASE_URL_ORDENES/api/ordenes" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "clienteCaida@test.com",
+    "direccionEnvio": "Av. Caida 789, Montevideo",
+    "telefono": "+59899444555",
+    "productos": [
+      {
+        "productoId": 1,
+        "cantidad": 1
+      }
+    ]
+  }')
+echo "$RESP"
+PEND_ID=$(echo "$RESP" | sed -n 's/.*"id": *\([0-9][0-9]*\).*/\1/p')
+
+if [ -z "$PEND_ID" ]; then
+  echo "  FALLA no se pudo crear la orden con el broker caido"
+  fallos=$((fallos + 1))
+else
+  check "la orden nace pendiente de MQTT" "$(estado "$PEND_ID")" "Pendiente Mosquitto"
+  check "no se descuenta stock todavia" "$(stock 1)" "$STOCK_ANTES"
+fi
+
+echo "Levantando el broker MQTT de nuevo..."
+run docker start mosquitto
+
+echo "Esperando al reconciliador y al consumidor..."
+sleep 15
+
+if [ -n "$PEND_ID" ]; then
+  run curl -s -w "\n[HTTP %{http_code}]\n" "$BASE_URL_ORDENES/api/ordenes/$PEND_ID"
+  check "la orden se proceso al reconectar" "$(estado "$PEND_ID")" "Ready to Delivery"
+  check "el stock se descuenta una sola vez" "$(stock 1)" "$((STOCK_ANTES - 1))"
+  run curl -s -w "\n[HTTP %{http_code}]\n" "$BASE_URL_FACTURAS/api/ordenes/$PEND_ID/factura"
+fi
+
+echo ""
+if [ "$fallos" -eq 0 ]; then
+  echo "=== Recuperacion ante caida del broker: OK ==="
+else
+  echo "=== Recuperacion ante caida del broker: $fallos FALLO(S) ==="
+fi
+
+echo ""
 echo "=== Fin test Procesador + Factura (API) ==="

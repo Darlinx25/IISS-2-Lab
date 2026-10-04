@@ -86,14 +86,15 @@ type ErrorResponse struct {
 }
 
 const (
-	EstadoCreated        = "Created"
-	EstadoConfirmed      = "Confirmed"
-	EstadoProcessing     = "Processing"
+	EstadoCreated         = "Created"
+	EstadoPendienteMQTT   = "Pendiente Mosquitto"
+	EstadoConfirmed       = "Confirmed"
+	EstadoProcessing      = "Processing"
 	EstadoReadyToDelivery = "Ready to Delivery"
-	EstadoNoStock        = "No Stock"
-	EstadoShipped        = "Shipped"
-	EstadoDelivered      = "Delivered"
-	EstadoCancelled      = "Cancelled"
+	EstadoNoStock         = "No Stock"
+	EstadoShipped         = "Shipped"
+	EstadoDelivered       = "Delivered"
+	EstadoCancelled       = "Cancelled"
 )
 
 var estadosActualizables = map[string]bool{
@@ -101,6 +102,8 @@ var estadosActualizables = map[string]bool{
 	EstadoReadyToDelivery: true,
 	EstadoNoStock:         true,
 }
+
+const intervaloReconciliacion = 5 * time.Second
 
 type Handlers struct {
 	repo       ordenesdb.OrdenRepository
@@ -144,6 +147,8 @@ func main() {
 	repo := ordenesdb.NewOrdenRepository(db)
 	h := &Handlers{repo: repo, mqttClient: conectarMQTT()}
 
+	go h.reconciliarPendientes()
+
 	router := gin.Default()
 
 	router.GET("/api/ordenes", h.obtenerOrdenes)
@@ -178,7 +183,18 @@ func conectarMQTT() mqtt.Client {
 		SetPingTimeout(10 * time.Second).
 		SetConnectTimeout(3 * time.Second).
 		SetConnectRetry(true).
-		SetConnectRetryInterval(2 * time.Second)
+		SetConnectRetryInterval(2 * time.Second).
+		SetMaxReconnectInterval(10 * time.Second).
+		SetAutoReconnect(true).
+		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+			fmt.Printf("Se perdió la conexión con MQTT (%v). Las órdenes nuevas quedarán pendientes.\n", err)
+		}).
+		SetReconnectingHandler(func(_ mqtt.Client, _ *mqtt.ClientOptions) {
+			fmt.Println("Reconectando con el broker MQTT...")
+		}).
+		SetOnConnectHandler(func(_ mqtt.Client) {
+			fmt.Println("Conectado al broker MQTT en", mqttBrokerURL)
+		})
 
 	client := mqtt.NewClient(opts)
 
@@ -186,7 +202,7 @@ func conectarMQTT() mqtt.Client {
 	token.WaitTimeout(3 * time.Second)
 
 	if token.Error() != nil {
-		fmt.Printf("MQTT no disponible en %s (%v). Se reintentará en segundo plano.\n", mqttBrokerURL, token.Error())
+		fmt.Printf("MQTT no disponible en %s (%v). Las órdenes quedarán pendientes y se publicarán al reconectar.\n", mqttBrokerURL, token.Error())
 	} else {
 		fmt.Println("MQTT conectado en", mqttBrokerURL)
 	}
@@ -249,7 +265,7 @@ func (h *Handlers) crearOrden(c *gin.Context) {
 		Email:          request.Email,
 		DireccionEnvio: request.DireccionEnvio,
 		Telefono:       request.Telefono,
-		Estado:         EstadoCreated,
+		Estado:         EstadoPendienteMQTT,
 		FechaCreacion:  ahora.Format("2006-01-02 15:04:05"),
 		Productos:      request.Productos,
 	}
@@ -262,37 +278,81 @@ func (h *Handlers) crearOrden(c *gin.Context) {
 		return
 	}
 
-	h.publicarOrden(id, ahora)
+	if err := h.publicarOrPendiente(id, ahora.Format(time.RFC3339)); err != nil {
+		fmt.Printf("Orden %d quedó pendiente de publicación: %v\n", id, err)
+	}
 
 	c.JSON(http.StatusCreated, IdResponse{ID: id})
 }
 
-func (h *Handlers) publicarOrden(id int64, momento time.Time) {
+func (h *Handlers) publicarOrPendiente(id int64, fechaCreacion string) error {
+	if err := h.publicar(id, fechaCreacion); err != nil {
+		return err
+	}
+
+	confirmada, err := h.repo.ConfirmarPublicada(id, EstadoPendienteMQTT, EstadoCreated)
+	if err != nil {
+		return fmt.Errorf("la orden %d se publicó pero no se pudo confirmar: %v", id, err)
+	}
+
+	if !confirmada {
+		fmt.Printf("Orden %d ya había avanzado de estado, no se toca\n", id)
+		return nil
+	}
+
+	fmt.Printf("Orden %d publicada en el topic '%s'\n", id, mqttTopicOrdenes)
+	return nil
+}
+
+func (h *Handlers) publicar(id int64, fechaCreacion string) error {
 	if h.mqttClient == nil {
-		return
+		return errors.New("cliente MQTT no inicializado")
 	}
 
 	mensaje := MensajeOrden{
 		ID:            id,
 		Estado:        EstadoCreated,
-		FechaCreacion: momento.Format(time.RFC3339),
+		FechaCreacion: fechaCreacion,
 	}
 
 	payload, err := json.Marshal(mensaje)
 	if err != nil {
-		fmt.Printf("Error serializando la orden %d: %v\n", id, err)
-		return
+		return fmt.Errorf("no se pudo serializar la orden %d: %v", id, err)
 	}
 
 	token := h.mqttClient.Publish(mqttTopicOrdenes, 1, false, payload)
-	token.WaitTimeout(3 * time.Second)
 
-	if token.Error() != nil {
-		fmt.Printf("Error publicando la orden %d en MQTT: %v\n", id, token.Error())
-		return
+	if !token.WaitTimeout(3 * time.Second) {
+		return fmt.Errorf("timeout esperando el PUBACK de la orden %d", id)
 	}
 
-	fmt.Printf("Orden %d publicada en el topic '%s'\n", id, mqttTopicOrdenes)
+	if token.Error() != nil {
+		return fmt.Errorf("no se pudo publicar la orden %d: %v", id, token.Error())
+	}
+
+	return nil
+}
+
+func (h *Handlers) reconciliarPendientes() {
+	for {
+		time.Sleep(intervaloReconciliacion)
+
+		if h.mqttClient == nil || !h.mqttClient.IsConnectionOpen() {
+			continue
+		}
+
+		pendientes, err := h.repo.ObtenerPorEstado(EstadoPendienteMQTT)
+		if err != nil {
+			fmt.Printf("Error buscando órdenes pendientes: %v\n", err)
+			continue
+		}
+
+		for _, orden := range pendientes {
+			if err := h.publicarOrPendiente(orden.ID, orden.FechaCreacion); err != nil {
+				fmt.Printf("Orden %d sigue pendiente: %v\n", orden.ID, err)
+			}
+		}
+	}
 }
 
 func (h *Handlers) modificarEstadoOrden(c *gin.Context) {
@@ -302,7 +362,8 @@ func (h *Handlers) modificarEstadoOrden(c *gin.Context) {
 	}
 
 	var request struct {
-		Estado string `json:"estado"`
+		Estado string   `json:"estado"`
+		Desde  []string `json:"desde"`
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil || !estadosActualizables[request.Estado] {
@@ -312,19 +373,35 @@ func (h *Handlers) modificarEstadoOrden(c *gin.Context) {
 		return
 	}
 
-	err := h.repo.CambiarEstado(id, request.Estado)
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, ErrorResponse{
-			Mensaje: "No existe una orden con el identificador " +
-				strconv.FormatInt(id, 10),
-		})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Mensaje: "Error al modificar la orden",
-		})
-		return
+	if len(request.Desde) > 0 {
+		ok, err := h.repo.ReclamarEstado(id, request.Desde, request.Estado)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{
+				Mensaje: "Error al modificar la orden",
+			})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusConflict, ErrorResponse{
+				Mensaje: "La orden ya no está en " + strings.Join(request.Desde, " ni "),
+			})
+			return
+		}
+	} else {
+		err := h.repo.CambiarEstado(id, request.Estado)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, ErrorResponse{
+				Mensaje: "No existe una orden con el identificador " +
+					strconv.FormatInt(id, 10),
+			})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{
+				Mensaje: "Error al modificar la orden",
+			})
+			return
+		}
 	}
 
 	orden, err := h.repo.ObtenerPorID(id)

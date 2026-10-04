@@ -79,6 +79,7 @@ function formatearFecha(iso) {
 function claseEstado(estado) {
     const mapa = {
         'Created': 'gris',
+        'Pendiente Mosquitto': 'naranja',
         'Confirmed': 'azul',
         'Processing': 'ambar',
         'Ready to Delivery': 'verde',

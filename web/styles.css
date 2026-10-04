@@ -68,6 +68,7 @@ body {
 .estado.azul    { background: #c0d8f5; color: #1a3c7a; }
 .estado.violeta { background: #dcd0f5; color: #3a1a7a; }
 .estado.verde-oscuro { background: #a0e0a0; color: #0d3d0d; }
+.estado.naranja { background: #ffd9b0; color: #8c4a00; }
 
 .alerta {
     padding: 10px 14px;

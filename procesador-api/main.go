@@ -26,9 +26,18 @@ const (
 
 const (
 	EstadoCreated         = "Created"
+	EstadoPendienteMQTT   = "Pendiente Mosquitto"
+	EstadoProcessing      = "Processing"
 	EstadoReadyToDelivery = "Ready to Delivery"
 	EstadoNoStock         = "No Stock"
 )
+
+var estadosProcesables = map[string]bool{
+	EstadoCreated:       true,
+	EstadoPendienteMQTT: true,
+}
+
+var estadosProcesablesList = []string{EstadoCreated, EstadoPendienteMQTT}
 
 var ordenesAPIURL = getEnv("ORDENES_API_URL", ordenesAPIURLDefault)
 var productosAPIURL = getEnv("PRODUCTOS_API_URL", productosAPIURLDefault)
@@ -69,9 +78,13 @@ type Producto struct {
 }
 
 func main() {
-	client := conectarMQTT()
-	suscribirse(client)
 	conectarFacturasDB()
+
+	client := conectarMQTT()
+
+	if err := suscribirse(client); err != nil {
+		fmt.Printf("Suscripción inicial pendiente: %v\n", err)
+	}
 
 	fmt.Println("======================================")
 	fmt.Println("Procesador de órdenes")
@@ -94,7 +107,24 @@ func conectarMQTT() mqtt.Client {
 		SetPingTimeout(10 * time.Second).
 		SetConnectTimeout(3 * time.Second).
 		SetConnectRetry(true).
-		SetConnectRetryInterval(2 * time.Second)
+		SetConnectRetryInterval(2 * time.Second).
+		SetMaxReconnectInterval(10 * time.Second).
+		SetAutoReconnect(true).
+		SetCleanSession(false).
+		SetResumeSubs(true).
+		SetDefaultPublishHandler(onMessage).
+		SetOnConnectHandler(func(c mqtt.Client) {
+			fmt.Println("Conectado al broker MQTT en", mqttBrokerURL)
+			if err := suscribirse(c); err != nil {
+				fmt.Println("Aviso:", err)
+			}
+		}).
+		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+			fmt.Printf("Se perdió la conexión con MQTT (%v). Las órdenes encoladas se recuperarán al reconectar.\n", err)
+		}).
+		SetReconnectingHandler(func(_ mqtt.Client, _ *mqtt.ClientOptions) {
+			fmt.Println("Reconectando con el broker MQTT...")
+		})
 
 	client := mqtt.NewClient(opts)
 
@@ -146,18 +176,22 @@ func conectarFacturasDB() {
 	fmt.Println("Conectado a facturas-db")
 }
 
-func suscribirse(client mqtt.Client) {
+func suscribirse(client mqtt.Client) error {
+	var ultimoError error
+
 	for i := 0; i < 30; i++ {
 		token := client.Subscribe(mqttTopicOrdenes, 1, onMessage)
 		token.WaitTimeout(3 * time.Second)
 		if token.Error() == nil {
 			fmt.Println("Suscripto al topic:", mqttTopicOrdenes)
-			return
+			return nil
 		}
-		fmt.Printf("Reintentando suscripción... (%d/30): %v\n", i+1, token.Error())
+		ultimoError = token.Error()
+		fmt.Printf("Reintentando suscripción... (%d/30): %v\n", i+1, ultimoError)
 		time.Sleep(2 * time.Second)
 	}
-	panic("No se pudo suscribir al topic " + mqttTopicOrdenes)
+
+	return fmt.Errorf("no se pudo suscribir al topic %s: %w", mqttTopicOrdenes, ultimoError)
 }
 
 var onMessage mqtt.MessageHandler = func(client mqtt.Client, msg mqtt.Message) {
@@ -182,10 +216,30 @@ func procesar(id int64) error {
 		return fmt.Errorf("la orden %d no existe", id)
 	}
 
-	if orden.Estado != EstadoCreated {
-		fmt.Printf("Orden %d ignorada: ya procesada (estado=%s)\n", id, orden.Estado)
+	if !estadosProcesables[orden.Estado] {
+		fmt.Printf("Orden %d ignorada: estado=%s\n", id, orden.Estado)
 		return nil
 	}
+
+	factura, err := facturaRepo.ObtenerFacturaPorOrden(id)
+	if err != nil {
+		return fmt.Errorf("no se pudo verificar la factura de la orden %d: %v", id, err)
+	}
+	if factura != nil {
+		fmt.Printf("Orden %d ignorada: ya tiene la factura %d\n", id, factura.ID)
+		return nil
+	}
+
+	reclamada, err := reclamarOrden(id, EstadoProcessing)
+	if err != nil {
+		return fmt.Errorf("no se pudo reclamar la orden %d: %v", id, err)
+	}
+	if !reclamada {
+		fmt.Printf("Orden %d ignorada: ya fue reclamada por otra entrega\n", id)
+		return nil
+	}
+
+	fmt.Printf("Orden %d reclamada para procesar\n", id)
 
 	detalles := make([]facturasdb.ItemFactura, 0, len(orden.Productos))
 
@@ -295,6 +349,32 @@ func obtenerProductoDeAPI(id int64) (*Producto, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func reclamarOrden(id int64, hasta string) (bool, error) {
+	body, err := json.Marshal(struct {
+		Estado string   `json:"estado"`
+		Desde  []string `json:"desde"`
+	}{Estado: hasta, Desde: estadosProcesablesList})
+	if err != nil {
+		return false, err
+	}
+
+	resp, err := peticion(http.MethodPatch, ordenesAPIURL+"/api/ordenes/"+strconv.FormatInt(id, 10), body)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return false, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("no se pudo reclamar la orden %d (HTTP %d)", id, resp.StatusCode)
+	}
+
+	return true, nil
 }
 
 func cambiarEstadoOrden(id int64, estado string) error {

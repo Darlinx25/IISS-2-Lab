@@ -61,6 +61,13 @@ services:
       - "1883:1883"
     volumes:
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "healthcheck", "-m", "ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   ordenes-api:
     build:
@@ -82,7 +89,7 @@ services:
       productos-api:
         condition: service_started
       mosquitto:
-        condition: service_started
+        condition: service_healthy
 
   procesador-api:
     build:
@@ -101,7 +108,7 @@ services:
       DB_PASSWORD: password
     depends_on:
       mosquitto:
-        condition: service_started
+        condition: service_healthy
       ordenes-api:
         condition: service_started
       productos-api:
@@ -157,4 +164,5 @@ volumes:
   ordenes_data:
   facturas_data:
   jenkins_data:
+  mosquitto_data:
   
