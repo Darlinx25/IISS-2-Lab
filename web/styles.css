@@ -94,3 +94,78 @@ body {
     font-size: 12px;
     color: #777;
 }
+
+.fila-clic {
+    cursor: pointer;
+}
+
+.fila-abierta {
+    background: #eef4ff;
+    box-shadow: inset 3px 0 0 #2563eb;
+}
+
+.fila-detalle > td {
+    padding: 0;
+    background: #fafbfc;
+    border-bottom: 2px solid #ddd;
+}
+
+.detalle-cabecera {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 28px;
+    padding: 14px 16px;
+    border-bottom: 1px solid #e5e5e5;
+}
+
+.detalle-cabecera > div {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.detalle-cabecera span:first-child {
+    font-size: 11px;
+    color: #777;
+    text-transform: uppercase;
+}
+
+.detalle-cabecera strong {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.tabla-detalle {
+    background: #fff;
+    font-size: 13px;
+}
+
+.tabla-detalle th,
+.tabla-detalle td {
+    padding: 9px 16px;
+}
+
+.tabla-detalle thead th {
+    background: #f0f2f4;
+}
+
+.tabla-detalle tfoot td {
+    border-top: 2px solid #ddd;
+}
+
+.total-etiqueta {
+    text-align: right;
+    color: #555;
+}
+
+.cargando {
+    color: #777;
+    padding: 14px 16px;
+    margin: 0;
+}
+
+.detalle-error {
+    color: #991b1b;
+    padding: 14px 16px;
+    margin: 0;
+}
