@@ -8,11 +8,26 @@
 
 <img width="957" height="970" alt="image" src="https://github.com/user-attachments/assets/e0e32941-a77c-471f-8df9-2918f7387a52" />
 
+### Puertos
+
+| Servicio | URL |
+|---|---|
+| Interfaz web | http://localhost:8083 |
+| API de productos | http://localhost:8080 |
+| API de órdenes | http://localhost:8081 |
+| API de facturas (procesador) | http://localhost:8082 |
+| Jenkins | http://localhost:8090 |
+| MySQL productos | localhost:3306 |
+| MySQL órdenes | localhost:3307 |
+| MySQL facturas | localhost:3308 |
+| MQTT (mosquitto) | localhost:1883 |
+
 
 ### Estructura del proyecto
 ```
-iiss2-apis/
+IISS-2-Lab/
 ├── docker-compose.yml
+├── README.md
 ├── ordenes.yaml
 ├── productos.yaml
 │
@@ -21,34 +36,65 @@ iiss2-apis/
 │   ├── go.mod
 │   ├── go.sum
 │   ├── main.go
-│   └── test-api.sh
+│   ├── test-api.sh
+│   └── mysql/
+│       └── repository.go
 │
 ├── productos-api/
 │   ├── Dockerfile
 │   ├── go.mod
 │   ├── go.sum
 │   ├── main.go
-│   └── test-api.sh
+│   ├── test-api.sh
+│   └── mysql/
+│       └── repository.go
 │
 ├── procesador-api/
 │   ├── Dockerfile
 │   ├── go.mod
 │   ├── go.sum
 │   ├── main.go
-│   └── test-api.sh
+│   ├── test-api.sh
+│   └── mysql/
+│       └── repository.go
 │
-├── db/
-│   ├── productos/
-│   │   └── init.sql
-│   ├── ordenes/
-│   │   └── init.sql
-│   └── facturas/
-│       └── init.sql
+├── web/
+│   ├── Dockerfile
+│   ├── index.html
+│   ├── app.js
+│   ├── styles.css
+│   └── nginx.conf
 │
-└── mosquitto/
-    └── config/
-        └── mosquitto.conf
+├── jenkins/
+│   ├── Jenkinsfile
+│   └── entradas/        
+│
+├── mosquitto/
+│   └── config/
+│       └── mosquitto.conf
+│
+└── db/
+    ├── productos/
+    │   └── init.sql
+    ├── ordenes/
+    │   └── init.sql
+    └── facturas/
+        └── init.sql
 ```
+
+### Interfaz web
+
+La interfaz web está disponible en [http://localhost:8083](http://localhost:8083/).
+Consume `ordenes-api` a través de nginx, que actúa como reverse proxy.
+
+Muestra:
+
+1. Una tabla con las órdenes de compra (Id, Email, Teléfono, Status y Fecha de creación),
+   ordenadas por defecto de la más reciente a la más antigua.
+2. Al hacer click sobre una orden, se expande el detalle con los productos de esa orden
+   (cantidad, precio unitario y subtotal).
+3. Para las órdenes en estado `Ready to Delivery`, se muestra además el detalle de la
+   facturación del pedido (número de factura, fecha de emisión, ítems y monto total).
 
 ### Jenkins
 
