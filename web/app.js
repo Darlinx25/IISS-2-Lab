@@ -92,10 +92,41 @@ async function cargarDetalle(celda, id) {
         }
 
         //devuelve las claves en camelCase (id, email, productos, productoId...). Es al reves que /api/ordenes
-        celda.innerHTML = construirDetalle(await respuesta.json());
+        const detalle = await respuesta.json();
+        celda.innerHTML = construirDetalle(detalle);
+
+        // solo las ordenes "Ready to Delivery" tienen factura.
+        if (detalle.estado === 'Ready to Delivery') {
+            const bloque = document.createElement('div');
+            bloque.className = 'detalle-factura';
+            bloque.innerHTML = '<p class="cargando">Cargando facturacion...</p>';
+            celda.appendChild(bloque);
+            cargarFactura(bloque, id);
+        }
     } catch (error) {
         celda.innerHTML = '<p class="detalle-error">No se pudo cargar el detalle de la orden ' +
             escapar(id) + ': ' + escapar(error.message) + '</p>';
+    }
+}
+
+async function cargarFactura(bloque, id) {
+    try {
+        const respuesta = await fetch('/api/ordenes/' + id + '/factura');
+
+        // La factura la genera procesador-api de forma asincrona (via MQTT).
+        // Si todavia no esta lista, la API responde 404.
+        if (respuesta.status === 404) {
+            bloque.innerHTML = '<p class="detalle-error">La orden todavia no tiene factura generada.</p>';
+            return;
+        }
+        if (!respuesta.ok) {
+            throw new Error('La API respondio con HTTP ' + respuesta.status);
+        }
+
+        bloque.innerHTML = construirFactura(await respuesta.json());
+    } catch (error) {
+        bloque.innerHTML = '<p class="detalle-error">No se pudo cargar la facturacion: ' +
+            escapar(error.message) + '</p>';
     }
 }
 
@@ -137,6 +168,42 @@ function construirDetalle(detalle) {
     html += '</tbody><tfoot><tr>' +
             '<td colspan="5" class="total-etiqueta">Total</td>' +
             '<td class="total-valor"><strong>$' + formatearPrecio(total) + '</strong></td>' +
+            '</tr></tfoot></table>';
+
+    return html;
+}
+
+function construirFactura(factura) {
+    let html = '';
+
+    html += '<h3 class="factura-titulo">Facturacion</h3>';
+    html += '<div class="detalle-cabecera">';
+    html += '<div><span>Factura</span><strong>#' + escapar(factura.id) + '</strong></div>';
+    html += '<div><span>Emitida</span><strong>' + escapar(formatearFecha(factura.fechaEmision)) + '</strong></div>';
+    html += '<div><span>Monto total</span><strong>$' + formatearPrecio(factura.montoTotal) + '</strong></div>';
+    html += '</div>';
+
+    if (!factura.items || factura.items.length === 0) {
+        return html + '<p class="sin-datos">La factura no tiene items.</p>';
+    }
+
+    html += '<table class="tabla tabla-detalle"><thead><tr>' +
+            '<th>Producto</th><th>Cantidad</th><th>Precio unitario</th><th>Subtotal</th>' +
+            '</tr></thead><tbody>';
+
+    for (const item of factura.items) {
+        const subtotal = item.cantidad * item.precioUnitario;
+        html += '<tr>' +
+            '<td>' + escapar(item.productoId) + '</td>' +
+            '<td>' + escapar(item.cantidad) + '</td>' +
+            '<td>$' + formatearPrecio(item.precioUnitario) + '</td>' +
+            '<td><strong>$' + formatearPrecio(subtotal) + '</strong></td>' +
+            '</tr>';
+    }
+
+    html += '</tbody><tfoot><tr>' +
+            '<td colspan="3" class="total-etiqueta">Total</td>' +
+            '<td class="total-valor"><strong>$' + formatearPrecio(factura.montoTotal) + '</strong></td>' +
             '</tr></tfoot></table>';
 
     return html;
