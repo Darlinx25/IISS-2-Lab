@@ -101,6 +101,10 @@ Muestra:
 Interfaz web:
 [http://localhost:8090](http://localhost:8090/)
 
+Obtener clave de Jenkins
+```
+docker exec -it jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+```
 1. Al hacer docker compose up, en los logs de Jenkins obtenemos la password temporal de admin que nos pide para logearnos.
 2. Luego en la interfaz web de Jenkins instalamos lo recomendado en la primera vez iniciada.
 3. Creamos job tipo pipeline.
