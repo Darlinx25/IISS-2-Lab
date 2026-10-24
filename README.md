@@ -378,3 +378,115 @@ Publicar un mensaje manualmente (caso "sin stock" o reprocesamiento).
 ```bash
 docker exec mosquitto mosquitto_pub -t "ordenes/para-procesar" -m '{"id":9999,"estado":"Created"}' -q 1
 ```
+
+
+### Docker Swarm - Balanceo de carga (API de Órdenes)
+
+Para simular un cluster con múltiples instancias de `ordenes-api` y balancear las solicitudes `POST /api/ordenes`, se utiliza Docker Swarm con el *ingress routing mesh* sobre el puerto `8081`.
+
+#### Requisitos
+
+- Docker con Swarm habilitado
+- Imagen `ordenes-api:lab5` construida
+- Dependencias levantadas: `ordenes-db`, `productos-api`, `productos-db`, `mosquitto`
+
+#### Inicializar Swarm
+
+```bash
+docker swarm init
+```
+
+Verificar el nodo:
+
+```bash
+docker node ls
+```
+
+#### Crear red overlay
+
+```bash
+docker network create --driver overlay --attachable iiss-net
+```
+
+#### Construir imagen de `ordenes-api`
+
+Desde la raíz del proyecto:
+
+```bash
+docker build -t ordenes-api:lab5 ./ordenes-api
+```
+
+#### Conectar dependencias a la red overlay
+
+Si las dependencias fueron levantadas con `docker compose`, es necesario conectarlas a `iiss-net` para que las réplicas del Swarm puedan resolver sus nombres:
+
+```bash
+docker network connect iiss-net productos-db
+docker network connect iiss-net ordenes-db
+docker network connect iiss-net productos-api
+docker network connect iiss-net mosquitto
+```
+
+#### Desplegar 3 réplicas de `ordenes-api`
+
+```bash
+docker service create \
+  --name ordenes-api-cluster \
+  --network iiss-net \
+  --replicas 3 \
+  --publish published=8081,target=8081 \
+  --env DB_HOST=ordenes-db \
+  --env DB_PORT=3306 \
+  --env DB_NAME=ordenes \
+  --env DB_USER=user \
+  --env DB_PASSWORD=password \
+  --env PRODUCTOS_API_URL=http://productos-api:8080 \
+  --env MQTT_BROKER_URL=tcp://mosquitto:1883 \
+  ordenes-api:lab5
+```
+
+#### Verificar réplicas y estado
+
+Listar servicios:
+
+```bash
+docker service ls
+```
+
+Ver el estado de cada réplica:
+
+```bash
+docker service ps ordenes-api-cluster
+```
+
+Deben aparecer `3/3` en `REPLICAS` y todas las tareas en estado `Running`.
+
+#### Verificar balanceo de carga
+
+Para visualizar los requests HTTP que llegan a las réplicas, filtrar los logs por el acceso de Gin:
+
+**Bash / WSL:**
+
+```bash
+docker service logs ordenes-api-cluster -f 2>&1 | grep "\[GIN\].*POST"
+```
+
+**PowerShell:**
+
+```powershell
+docker service logs ordenes-api-cluster -f 2>&1 | Select-String -Pattern "\[GIN\].*POST"
+```
+
+Las peticiones `POST /api/ordenes` deberán aparecer con el nombre de cada réplica (`ordenes-api-cluster.1`, `.2`, `.3`), demostrando que el *ingress routing mesh* distribuye el tráfico entre las instancias.
+
+#### Escalar réplicas
+
+Para disminuir o aumentar la cantidad de instancias:
+
+```bash
+docker service scale ordenes-api-cluster=2
+docker service scale ordenes-api-cluster=1
+docker service scale ordenes-api-cluster=3
+```
+
+Tras escalar, verificar con `docker service ps ordenes-api-cluster` y con los logs filtrados por `[GIN]` que únicamente las réplicas activas reciben las solicitudes `POST /api/ordenes`.
