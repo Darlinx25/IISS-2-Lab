@@ -490,3 +490,31 @@ docker service scale ordenes-api-cluster=3
 ```
 
 Tras escalar, verificar con `docker service ps ordenes-api-cluster` y con los logs filtrados por `[GIN]` que únicamente las réplicas activas reciben las solicitudes `POST /api/ordenes`.
+
+#### Scripts Parte 5
+
+```bash
+# Levantar Swarm, dependencias y 3 réplicas de ordenes-api
+./scripts/levantar-cluster.sh
+
+# Probar balanceo, bajar a 2 y 1 instancia, y verificar logs
+./scripts/probar-balanceo.sh
+
+# Opcional: no restaurar a 3 réplicas al final
+RESTORE=0 ./scripts/probar-balanceo.sh
+
+# Opcional: cantidad de requests por fase
+REQUESTS=30 ./scripts/probar-balanceo.sh
+
+# Bajar servicio, contenedores y red (conserva datos e imágenes)
+./scripts/bajar-cluster.sh
+
+# Borrar también datos, imágenes y logs
+./scripts/bajar-cluster.sh --all
+
+# Borrar todo lo anterior y salir de Docker Swarm
+./scripts/bajar-cluster.sh --all --swarm
+```
+
+La evidencia de logs queda en `logs/<fase>/`.
+No se usa nginx: el routing mesh de Swarm balancea el puerto publicado.

@@ -176,9 +176,20 @@ func main() {
 }
 
 func conectarMQTT() mqtt.Client {
+	clientID := getEnv("MQTT_CLIENT_ID", "")
+	if clientID == "" {
+		hostname, err := os.Hostname()
+		if err != nil || hostname == "" {
+			hostname = strconv.FormatInt(time.Now().UnixNano(), 10)
+		}
+		clientID = "ordenes-api-" + hostname
+	}
+
+	fmt.Println("MQTT client ID:", clientID)
+
 	opts := mqtt.NewClientOptions().
 		AddBroker(mqttBrokerURL).
-		SetClientID("ordenes-api").
+		SetClientID(clientID).
 		SetKeepAlive(30 * time.Second).
 		SetPingTimeout(10 * time.Second).
 		SetConnectTimeout(3 * time.Second).

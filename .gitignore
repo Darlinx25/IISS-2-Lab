@@ -3,3 +3,4 @@ binarios
 *.zip
 /deploy/
 /jenkins/entradas/
+/logs/

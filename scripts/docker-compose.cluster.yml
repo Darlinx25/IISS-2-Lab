@@ -1,0 +1,5 @@
+services:
+  productos-db:
+    ports: !reset []
+  ordenes-db:
+    ports: !reset []
